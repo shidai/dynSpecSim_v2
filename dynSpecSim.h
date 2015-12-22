@@ -6,9 +6,11 @@
 ////#include <gsl/gsl_randist.h>
 #include <fftw3.h>
 #include "T2toolkit.h"
+#include "cpgplot.h"
 
 typedef struct acfStruct {
 	double phaseGradient;
+	double cFreq; // observing central frequency
 	double bw; // observing bandwidth
 	double f0; // scintillation bandwidth
 	double tint; // integration time
@@ -28,16 +30,24 @@ typedef struct acfStruct {
 	fftw_complex *intensity;  // intensity 
 	double **dynSpec; // dynamic spectrum 
 	double **dynSpecWindow; // dynamic spectrum window, nchn*nsubint dimension
+	float *dynPlot; // dynamic spectrum for pgplot
 } acfStruct;
 
 typedef struct controlStruct {
-	double obsBW;
-	double tsubRequested;
-	double nsub;
-	double nchan;
+	char fname[1024]; // intput file name
+	char oname[1024]; // output file name
 
-	double scint_freqbw;
-	double scint_ts;
+	double cFreq;  // observing central frequency
+	double tsub;  // subintegration time
+	int nsub;  // number of subintegrations
+	double chanBW;  // subchannel bandwidth
+	int nchan; // number of subchannels
+
+	double scint_freqbw;   // scintillation bandwidth
+	double scint_ts;       // scintillation timescale
+
+	double whiteLevel;   // white noise level, mJy
+	double cFlux;        // flux density of pulsars, mJy
 }controlStruct;
 
 int idft2d (acfStruct *acfStructure);
@@ -52,13 +62,23 @@ void preAllocateMemory (acfStruct *acfStructure);
 double find_peak_value (int n, double *s);
 int calSize (acfStruct *acfStructure, double *size, double *ratio);
 int windowSize (acfStruct *acfStructure, double *size);
+int readParams(char *fname, char *oname, controlStruct *control);
+void initialiseControl(controlStruct *control);
+
+void heatMap (acfStruct *acfStructure);
+void palett(int TYPE, float CONTRA, float BRIGHT);
+int plotDynSpec (char *pname);
 
 int calculateScintScale (acfStruct *acfStructure, controlStruct *control)
 {
+	FILE *fin;
+	int i;
+
 	printf ("Starting simulating dynamic spectrum\n");
-	acfStructure->bw = fabs(control->obsBW); // MHz
+	acfStructure->cFreq = control->cFreq; // MHz
+	acfStructure->bw = fabs(control->chanBW*control->nchan); // MHz
 	acfStructure->f0 = control->scint_freqbw;  // MHz
-	acfStructure->tint = control->nsub*control->tsubRequested;  // s
+	acfStructure->tint = control->nsub*control->tsub;  // s
 	acfStructure->t0 = control->scint_ts; // MHz
 	printf ("Scintillation bandwidth: %lf (MHz)\n", acfStructure->f0);
 	printf ("Scintillation time-scale: %lf (s)\n", acfStructure->t0);
@@ -72,6 +92,26 @@ int calculateScintScale (acfStruct *acfStructure, controlStruct *control)
 	calACF (acfStructure);
 	power (acfStructure);
 	simDynSpec (acfStructure);
+
+	if ((fin=fopen(control->oname,"w"))==NULL)
+	{
+		printf ("Can't open output file!\n");
+		exit(1);
+	}
+
+	fprintf(fin,"INFO nsub nchn bandwidth cFreq\n");
+	fprintf(fin,"START %d %d %lf %lf\n",acfStructure->nsubint,acfStructure->nchn,acfStructure->bw,acfStructure->cFreq);
+
+	for (i=0;i<acfStructure->nsubint*acfStructure->nchn;i++)
+	{
+		fprintf(fin,"%lf\n",acfStructure->dynPlot[i]);
+	}
+
+	if (fclose(fin))
+	{
+		printf ("Can't close output file!\n");
+		exit(1);
+	}
 
 	return 0;
 }
@@ -273,6 +313,8 @@ void allocateMemory (acfStruct *acfStructure)
 	{
 		acfStructure->dynSpecWindow[i] = (double *)fftw_malloc(sizeof(double)*nsubint);
 	}
+
+	acfStructure->dynPlot = (float *)malloc(sizeof(float)*nsubint*nchn);
 }
 
 void deallocateMemory (acfStruct *acfStructure)
@@ -286,6 +328,7 @@ void deallocateMemory (acfStruct *acfStructure)
 	fftw_free(acfStructure->intensity); 
 	free(acfStructure->acf2d);
 	free(acfStructure->psrt);
+	free(acfStructure->dynPlot);
 
 	int i;
 	for (i = 0; i < nf; i++)
@@ -363,6 +406,7 @@ int simDynSpec (acfStruct *acfStructure)
 		for (j = 0; j < nsubint; j++)
 		{
 			acfStructure->dynSpecWindow[i][j] = acfStructure->dynSpec[i+nf0][j+ns0]/sum;
+			acfStructure->dynPlot[i*nsubint+j] = (float)(acfStructure->dynSpecWindow[i][j]);
 			//fprintf (fp, "%.10lf  ", acfStructure->dynSpec[i][j]/sum);
 		}
 	}
@@ -528,4 +572,398 @@ void preAllocateMemory (acfStruct *acfStructure)
 	acfStructure->ns = ns;
 	acfStructure->nf = nf;
 }
+
+int readParams(char *fname, char *oname, controlStruct *control)
+{
+	FILE *fin;
+	char param[1024];
+	int endit=-1;
+	int finished=0;
+
+	// define the output file name
+	strcpy(control->oname,oname);
+
+	///////////////////////////////////////
+	if ((fin=fopen(fname,"r"))==NULL)
+	{
+		printf ("Can't open file!\n");
+		exit(1);
+	}
+
+	printf("Reading parameters...\n");
+
+      	// Find the start observation
+	while (!feof(fin))
+	{
+		if (fscanf(fin,"%s",param)==1)
+		{
+			if (strcasecmp(param,"START_OBS")==0)
+			{
+				endit=0;
+				break;
+			}
+		}
+		else 
+			return 1;
+	}
+
+	printf("Got to this bit with %d\n",endit);
+	if (endit==-1)
+		return 1;
+
+	do
+	{
+		fscanf(fin,"%s",param);
+		if (strcasecmp(param,"END_OBS")==0)
+			endit=1;
+		else
+		{
+			//if (strcasecmp(param,"PHEAD")==0)
+			//	fscanf(fin,"%s",control->primaryHeaderParams);
+			//else if (strcasecmp(param,"SRC")==0)
+			//     	fscanf(fin,"%s",control->src);
+			//else if (strcasecmp(param,"EXACT_EPHEMERIS")==0)
+			//	fscanf(fin,"%s",control->exact_ephemeris);
+			//else if (strcasecmp(param,"TEMPLATE")==0)
+			//	fscanf(fin,"%s",control->template);
+			if (strcasecmp(param,"SCINT_TS")==0)
+				fscanf(fin,"%lf",&(control->scint_ts));
+			else if (strcasecmp(param,"SCINT_FREQBW")==0)
+				fscanf(fin,"%lf",&(control->scint_freqbw));	  
+			else if (strcasecmp(param,"FILE")==0)
+				fscanf(fin,"%s",control->fname);
+			//else if (strcasecmp(param,"TYPE")==0)
+			//	fscanf(fin,"%s",control->type);
+			//else if (strcasecmp(param,"STT_IMJD")==0)
+			//	fscanf(fin,"%d",&(control->stt_imjd));
+			//else if (strcasecmp(param,"STT_SMJD")==0)
+			//	fscanf(fin,"%lf",&(control->stt_smjd));
+			//else if (strcasecmp(param,"STT_OFFS")==0)
+      			//	fscanf(fin,"%lf",&(control->stt_offs));
+			else if (strcasecmp(param,"TSUB")==0)
+      				fscanf(fin,"%lf",&(control->tsub));
+			else if (strcasecmp(param,"CFREQ")==0)
+      				fscanf(fin,"%lf",&(control->cFreq));
+			else if (strcasecmp(param,"CHAN_BW")==0)
+      				fscanf(fin,"%lf",&(control->chanBW));
+			else if (strcasecmp(param,"NCHAN")==0)
+			      	fscanf(fin,"%d",&(control->nchan));
+			//else if (strcasecmp(param,"NBIN")==0)
+      			//	fscanf(fin,"%d",&(control->nbin));
+			//else if (strcasecmp(param,"NPOL")==0)
+      			//	fscanf(fin,"%d",&(control->npol));
+			else if (strcasecmp(param,"NSUB")==0)
+      				fscanf(fin,"%d",&(control->nsub));
+			//else if (strcasecmp(param,"SEGLENGTH")==0)
+      			//	fscanf(fin,"%lf",&(control->segLength));
+			//else if (strcasecmp(param,"NFREQ_COEFF")==0)
+      			//	fscanf(fin,"%d",&(control->nfreqcoeff));
+			//else if (strcasecmp(param,"NTIME_COEFF")==0)
+			//      	fscanf(fin,"%d",&(control->ntimecoeff));
+			else if (strcasecmp(param,"WHITE_LEVEL")==0)
+      				fscanf(fin,"%lf",&(control->whiteLevel));
+			//else if (strcasecmp(param,"TSYS")==0)
+      			//	fscanf(fin,"%lf",&(control->tsys));
+			//else if (strcasecmp(param,"TSKY")==0)
+      			//	fscanf(fin,"%lf",&(control->tsky));
+			//else if (strcasecmp(param,"GAIN")==0)
+      			//	fscanf(fin,"%lf",&(control->gain));
+			else if (strcasecmp(param,"CFLUX")==0)
+			      	fscanf(fin,"%lf",&(control->cFlux));
+			//else if (strcasecmp(param,"SI")==0)
+			//	fscanf(fin,"%lf",&(control->si));
+			//else if (strcasecmp(param,"phaseResolvedSI")==0)
+			//{
+			//	fscanf(fin,"%s",control->phaseResolvedSI);
+			//	control->simProf = 1;
+			//}
+		}
+	} while (endit==0);
+
+	//////////////////////////////////////////////////////////////////////
+	//if (control->tsys != 0.0 && control->tsky != 0.0 && control->gain != 0.0 && control->whiteLevel == 0)
+	//{
+	//	control->radioNoise = (control->tsys+control->tsky)/(control->gain)/sqrt(2.0*(control->tsubRequested/control->nbin)*(fabs(control->obsBW)/control->nchan));
+	//}
+	//else if (control->tsys == 0.0 && control->tsky == 0.0 && control->gain == 0.0 && control->whiteLevel != 0)
+	//{
+	//	control->radioNoise = control->whiteLevel;
+	//}
+	//else 
+	//{
+	//	printf ("Double definiation of radio-meter noise!\n");
+	//	exit (1);
+	//}
+	//printf ("Nchan: %d; Tsys: %lf; Tsky: %lf; Gain: %lf; Radio-meter noise: %lf mJy\n", control->nchan, control->tsys, control->tsky, control->gain, control->radioNoise);
+
+	if (fclose(fin))
+	{
+		printf ("Can't close file.\n");
+		exit(1);
+	}
+
+	return finished;
+}
+
+void initialiseControl(controlStruct *control)
+{
+	//strcpy(control->primaryHeaderParams,"UNKNOWN");
+	//strcpy(control->exact_ephemeris,"UNKNOWN");
+	//strcpy(control->src,"UNKNOWN");
+	strcpy(control->fname,"UNKNOWN");
+	strcpy(control->oname,"UNKNOWN");
+	control->tsub = 0;
+	
+	// Standard defaults
+	//strcpy(control->type,"PSR");
+	//control->nbin = 128;
+	control->nchan = 32;
+	//control->npol = 1;
+	control->nsub = 8;
+	control->cFreq = 1400.0;
+	control->chanBW = -1;   // MHz
+	//control->segLength = 48000;
+	//control->nfreqcoeff = 16;
+	//control->ntimecoeff = 16;
+	//control->stt_imjd = 55000;
+	//control->stt_smjd = 5234.0;
+	//control->stt_offs = 0.1234;
+	control->tsub = 120;  // second
+	control->whiteLevel = 0;   // mJy
+	control->scint_ts  = 0.0;  // second
+	control->scint_freqbw = 0.0;   // MHz
+	//control->tsys = 0.0;
+	//control->tsky = 0.0;
+	//control->gain = 0.0;
+	control->cFlux = 0.0;   // mJy
+	//control->si = 0.0;
+	//control->radioNoise = 0.0;
+	//control->bat = 0;
+	//control->simProf = 0; // default: do not simulate profile with phase-resolved SI
+  // Note that the DM comes from the ephemeris
+}
+
+void heatMap (acfStruct *acfStructure)
+{
+	//int i,j;                     
+	//int dimx = acfStructure.ns;
+	//int dimy = acfStructure.nf; // dimensions 
+	//float tab[dimx*dimy];       // value
+  
+	float zmin,zmax;            /* min et max des valeurs de la fonction */
+	float tr[6];                /* matrice utilisee par pgimag */
+
+	int dimx = acfStructure->nsubint;
+	int dimy = acfStructure->nchn;
+	double bw = acfStructure->bw;
+  
+	zmin=0; zmax=1;
+
+	double f1 = acfStructure->cFreq-bw/2.0-2.0*bw/dimy; // MHz
+	double f2 = acfStructure->cFreq+bw/2.0+2.0*bw/dimy; // MHz
+	//double f1 = 1241; // MHz
+	//double f2 = 1497; // MHz
+	/*The transformation matrix TR is used to calculate the world
+	coordinates of the center of the "cell" that represents each
+	array element. The world coordinates of the center of the cell
+	corresponding to array element A(I,J) are given by:
+	X = TR(1) + TR(2)*I + TR(3)*J
+	Y = TR(4) + TR(5)*I + TR(6)*J
+	Usually TR(3) and TR(5) are zero -- unless the coordinate
+	transformation involves a rotation or shear.  The corners of the
+	quadrilateral region that is shaded by PGIMAG are given by
+	applying this transformation to (I1-0.5,J1-0.5), (I2+0.5, J2+0.5).*/
+  
+	//tr[0]=0;
+	//tr[1]=(float)(dimy)/dimx;
+	//tr[2]=0;
+	//tr[3]=0;
+	//tr[4]=0;
+	//tr[5]=1;
+  
+	tr[0]=-0.5;
+       	tr[1]=1;
+       	tr[2]=0;
+      	tr[3]=f2;
+      	tr[4]=0;
+      	tr[5]=-bw/dimy;
+ 
+	// plot 
+	//cpgbeg(0,"?",1,1);
+	cpgbeg(0,"2/xs",1,1);
+      	cpgsch(1.2); // set character height
+      	cpgscf(2); // set character font
+	cpgswin(0,dimx,f2,f1); // set window
+	//cpgsvp(0.1,0.9,0.1,0.9); // set viewport
+      	//cpgenv(1,dimx,f1,f2,0,0); // set window and viewport and draw labeled frame
+	cpgbox("BCTSIN",10,5,"BCTSIN",50,5);
+      	cpglab("Subintegration","Frequency (MHz)","Freq: 1369.0 MHz BW: -256.000 Length: 3840.0 S/N: 1000.0");
+	//cpgtick(0,0,1024,0,1.0/64,0.1,0.2,0,0,"1");
+	//palett(3, -0.4, 0.3);
+	//cpgimag(tab,dimx,dimy,1,dimx,1,dimy,zmin,zmax,tr);
+	cpggray(acfStructure->dynPlot,dimx,dimy,1,dimx,1,dimy,zmin,zmax,tr);
+
+	cpgend();
+} 
+
+void palett(int TYPE, float CONTRA, float BRIGHT)
+{
+//-----------------------------------------------------------------------
+// Set a "palette" of colors in the range of color indices used by
+// PGIMAG.
+//-----------------------------------------------------------------------
+	float GL[] = {0.0, 1.0};
+	float GR[] = {0.0, 1.0};
+	float GG[] = {0.0, 1.0};
+	float GB[] = {0.0, 1.0};
+	float RL[] = {-0.5, 0.0, 0.17, 0.33, 0.50, 0.67, 0.83, 1.0, 1.7};
+	float RR[] = { 0.0, 0.0,  0.0,  0.0,  0.6,  1.0,  1.0, 1.0, 1.0};
+	float RG[] = { 0.0, 0.0,  0.0,  1.0,  1.0,  1.0,  0.6, 0.0, 1.0};
+	float RB[] = { 0.0, 0.3,  0.8,  1.0,  0.3,  0.0,  0.0, 0.0, 1.0};
+	float HL[] = {0.0, 0.2, 0.4, 0.6, 1.0};
+	float HR[] = {0.0, 0.5, 1.0, 1.0, 1.0};
+	float HG[] = {0.0, 0.0, 0.5, 1.0, 1.0};
+	float HB[] = {0.0, 0.0, 0.0, 0.3, 1.0};
+	float WL[] = {0.0, 0.5, 0.5, 0.7, 0.7, 0.85, 0.85, 0.95, 0.95, 1.0};
+	float WR[] = {0.0, 1.0, 0.0, 0.0, 0.3,  0.8,  0.3,  1.0,  1.0, 1.0};
+	float WG[] = {0.0, 0.5, 0.4, 1.0, 0.0,  0.0,  0.2,  0.7,  1.0, 1.0};
+	float WB[] = {0.0, 0.0, 0.0, 0.0, 0.4,  1.0,  0.0,  0.0, 0.95, 1.0};
+	float AL[] = {0.0, 0.1, 0.1, 0.2, 0.2, 0.3, 0.3, 0.4, 0.4, 0.5, 0.5, 0.6, 0.6, 0.7, 0.7, 0.8, 0.8, 0.9, 0.9, 1.0};
+	float AR[] = {0.0, 0.0, 0.3, 0.3, 0.5, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0};
+	float AG[] = {0.0, 0.0, 0.3, 0.3, 0.0, 0.0, 0.0, 0.0, 0.8, 0.8, 0.6, 0.6, 1.0, 1.0, 1.0, 1.0, 0.8, 0.8, 0.0, 0.0};
+	float AB[] = {0.0, 0.0, 0.3, 0.3, 0.7, 0.7, 0.7, 0.7, 0.9, 0.9, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+      
+	if (TYPE == 1)
+	{   
+		//-- gray scale
+		cpgctab(GL, GR, GG, GB, 2, CONTRA, BRIGHT);
+	}
+	else if (TYPE == 2) 
+	{
+		//-- rainbow
+		cpgctab(RL, RR, RG, RB, 9, CONTRA, BRIGHT);
+	}
+	else if (TYPE == 3) 
+	{
+		//-- heat
+		cpgctab(HL, HR, HG, HB, 5, CONTRA, BRIGHT);
+	}
+	else if (TYPE == 4) 
+	{
+		//-- weird IRAF
+		cpgctab(WL, WR, WG, WB, 10, CONTRA, BRIGHT);
+	}
+	else if (TYPE == 5) 
+	{
+		//-- AIPS
+		cpgctab(AL, AR, AG, AB, 20, CONTRA, BRIGHT);
+	}
+}
+
+int plotDynSpec (char *pname)
+{
+	FILE *fin;
+	char start[128];
+	double bw,cFreq;
+	int nsub,nchn;
+	float val;
+	float *dynSpec;
+
+	int i;
+
+	int dimx;
+	int dimy;
+	float zmin,zmax;            /* min et max des valeurs de la fonction */
+	float tr[6];                /* matrice utilisee par pgimag */
+
+	if ((fin=fopen(pname,"r"))==NULL)
+	{
+		printf ("Can't open dynamic spectrum!\n");
+		exit(1);
+	}
+
+      	// Find the start of dynamic spectrum, which contains basic info
+	while (!feof(fin))
+	{
+		if (fscanf(fin,"%s %d %d %lf %lf",start,&nsub,&nchn,&bw,&cFreq)==5)
+		{
+			if (strcasecmp(start,"START")==0)
+			{
+				break;
+			}
+		}
+		//else 
+		//	return 1;
+	}
+
+	dynSpec = (float*)malloc(sizeof(float)*nsub*nchn);
+
+	i = 0;
+	while (fscanf(fin,"%f",&val)==1)
+	{
+		dynSpec[i] = val;
+		i++;
+	}
+
+	if (fclose(fin))
+	{
+		printf ("Can't close dynamic spectrum!\n");
+		exit(1);
+	}
+
+	dimx = nsub;
+	dimy = nchn;
+  
+	zmin=0; zmax=1;
+
+	double f1 = cFreq-bw/2.0-2.0*bw/dimy; // MHz
+	double f2 = cFreq+bw/2.0+2.0*bw/dimy; // MHz
+	//double f1 = 1241; // MHz
+	//double f2 = 1497; // MHz
+	/*The transformation matrix TR is used to calculate the world
+	coordinates of the center of the "cell" that represents each
+	array element. The world coordinates of the center of the cell
+	corresponding to array element A(I,J) are given by:
+	X = TR(1) + TR(2)*I + TR(3)*J
+	Y = TR(4) + TR(5)*I + TR(6)*J
+	Usually TR(3) and TR(5) are zero -- unless the coordinate
+	transformation involves a rotation or shear.  The corners of the
+	quadrilateral region that is shaded by PGIMAG are given by
+	applying this transformation to (I1-0.5,J1-0.5), (I2+0.5, J2+0.5).*/
+  
+	//tr[0]=0;
+	//tr[1]=(float)(dimy)/dimx;
+	//tr[2]=0;
+	//tr[3]=0;
+	//tr[4]=0;
+	//tr[5]=1;
+  
+	tr[0]=-0.5;
+       	tr[1]=1;
+       	tr[2]=0;
+      	tr[3]=f2;
+      	tr[4]=0;
+      	tr[5]=-bw/dimy;
+ 
+	// plot 
+	//cpgbeg(0,"?",1,1);
+	cpgbeg(0,"2/xs",1,1);
+      	cpgsch(1.2); // set character height
+      	cpgscf(2); // set character font
+	cpgswin(0,dimx,f2,f1); // set window
+	//cpgsvp(0.1,0.9,0.1,0.9); // set viewport
+      	//cpgenv(1,dimx,f1,f2,0,0); // set window and viewport and draw labeled frame
+	cpgbox("BCTSIN",10,5,"BCTSIN",50,5);
+      	cpglab("Subintegration","Frequency (MHz)","Freq: 1369.0 MHz BW: -256.000 Length: 3840.0 S/N: 1000.0");
+	//cpgtick(0,0,1024,0,1.0/64,0.1,0.2,0,0,"1");
+	//palett(3, -0.4, 0.3);
+	//cpgimag(tab,dimx,dimy,1,dimx,1,dimy,zmin,zmax,tr);
+	cpggray(dynSpec,dimx,dimy,1,dimx,1,dimy,zmin,zmax,tr);
+
+	cpgend();
+
+	free(dynSpec);
+
+	return 0;
+} 
 
