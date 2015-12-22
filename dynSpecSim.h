@@ -9,6 +9,9 @@
 #include "cpgplot.h"
 
 typedef struct acfStruct {
+	double cFlux;  // pulsar flux density
+	double whiteLevel;  // white noise level
+
 	double phaseGradient;
 	double cFreq; // observing central frequency
 	double bw; // observing bandwidth
@@ -17,6 +20,7 @@ typedef struct acfStruct {
 	double t0; // scintillation time-scale
 	int nchn;
 	int nsubint;
+
 	int ns; // sampling number of spatial scale 
 	int nf; // sampling number of frequency scale
 	double size[2]; // sampling boundary
@@ -75,6 +79,8 @@ int calculateScintScale (acfStruct *acfStructure, controlStruct *control)
 	int i;
 
 	printf ("Starting simulating dynamic spectrum\n");
+	acfStructure->cFlux = control->cFlux; // mJy
+	acfStructure->whiteLevel = control->whiteLevel; // mJy
 	acfStructure->cFreq = control->cFreq; // MHz
 	acfStructure->bw = fabs(control->chanBW*control->nchan); // MHz
 	acfStructure->f0 = control->scint_freqbw;  // MHz
@@ -397,6 +403,7 @@ int simDynSpec (acfStruct *acfStructure)
 	//printf ("seed %ld\n",seed);
 	rand = TKgaussDev(&seed);
 	rand2 = rand - floor(rand);
+	//printf ("rand %lf\n",rand);
 
 	int nf0 = (int)(rand2*(nf-nchn));
 	int ns0 = (int)(rand2*(ns-nsubint));
@@ -406,7 +413,9 @@ int simDynSpec (acfStruct *acfStructure)
 		for (j = 0; j < nsubint; j++)
 		{
 			acfStructure->dynSpecWindow[i][j] = acfStructure->dynSpec[i+nf0][j+ns0]/sum;
-			acfStructure->dynPlot[i*nsubint+j] = (float)(acfStructure->dynSpecWindow[i][j]);
+			acfStructure->dynPlot[i*nsubint+j] = (float)(acfStructure->dynSpecWindow[i][j]*acfStructure->cFlux+acfStructure->whiteLevel*TKgaussDev(&seed));   // add in noise here
+			//printf ("noise rand %lf\n",TKgaussDev(&seed));
+			//acfStructure->dynPlot[i*nsubint+j] = (float)(acfStructure->dynSpecWindow[i][j]);
 			//fprintf (fp, "%.10lf  ", acfStructure->dynSpec[i][j]/sum);
 		}
 	}
