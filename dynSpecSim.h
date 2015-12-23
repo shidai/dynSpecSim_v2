@@ -38,7 +38,6 @@ typedef struct acfStruct {
 } acfStruct;
 
 typedef struct controlStruct {
-	char fname[1024]; // intput file name
 	char oname[1024]; // output file name
 
 	double cFreq;  // observing central frequency
@@ -63,7 +62,7 @@ void allocateMemory (acfStruct *acfStructure);
 int simDynSpec (acfStruct *acfStructure);
 int calculateScintScale (acfStruct *acfStructure, controlStruct *control);
 void preAllocateMemory (acfStruct *acfStructure);
-double find_peak_value (int n, double *s);
+float find_peak_value (int n, float *s);
 int calSize (acfStruct *acfStructure, double *size, double *ratio);
 int windowSize (acfStruct *acfStructure, double *size);
 int readParams(char *fname, char *oname, controlStruct *control);
@@ -76,7 +75,7 @@ int plotDynSpec (char *pname);
 int calculateScintScale (acfStruct *acfStructure, controlStruct *control)
 {
 	FILE *fin;
-	int i;
+	int i, j;
 
 	printf ("Starting simulating dynamic spectrum\n");
 	acfStructure->cFlux = control->cFlux; // mJy
@@ -105,12 +104,15 @@ int calculateScintScale (acfStruct *acfStructure, controlStruct *control)
 		exit(1);
 	}
 
-	fprintf(fin,"INFO nsub nchn bandwidth cFreq\n");
-	fprintf(fin,"START %d %d %lf %lf\n",acfStructure->nsubint,acfStructure->nchn,acfStructure->bw,acfStructure->cFreq);
+	fprintf(fin,"INFO nsub nchn bandwidth tint cFreq\n");
+	fprintf(fin,"START %d %d %lf %lf %lf\n",acfStructure->nsubint,acfStructure->nchn,acfStructure->bw,acfStructure->tint,acfStructure->cFreq);
 
-	for (i=0;i<acfStructure->nsubint*acfStructure->nchn;i++)
+	for (i=0;i<acfStructure->nchn;i++)
 	{
-		fprintf(fin,"%lf\n",acfStructure->dynPlot[i]);
+		for (j=0;j<acfStructure->nsubint;j++)
+		{
+			fprintf(fin,"%d %d %lf\n", i, j, acfStructure->dynPlot[i*acfStructure->nsubint+j]);
+		}
 	}
 
 	if (fclose(fin))
@@ -138,7 +140,7 @@ int calACF (acfStruct *acfStructure)
 		acfStructure->s[i] = -acfStructure->size[1]+i*steps;
 	}
 
-  for (i = 0; i < nf; i++)
+      	for (i = 0; i < nf; i++)
 	{
 		acfStructure->f[i] = -acfStructure->size[0]+i*stepf;
 	}
@@ -479,8 +481,8 @@ int calSize (acfStruct *acfStructure, double *size, double *ratio)
 	int nf = (int)(size[0]*2/stepf)+1;
 	int ns = (int)(size[1]*2/steps)+1;
 
-	double s[ns], acfs[ns], smax;
-	double f[nf], acff[nf], fmax;
+	float  s[ns], acfs[ns], smax;
+	float  f[nf], acff[nf], fmax;
 	//double c; // value at the center
 
 	for (i = 0; i < ns; i++)
@@ -514,10 +516,10 @@ int calSize (acfStruct *acfStructure, double *size, double *ratio)
 	return 0;
 }
 
-double find_peak_value (int n, double *s)
+float find_peak_value (int n, float *s)
 {
 	int i;
-	double temp[n];
+	float temp[n];
 
 	for (i = 0; i < n; i++)
 	{
@@ -525,7 +527,7 @@ double find_peak_value (int n, double *s)
 	}
 
 	
-	double a, b, c;
+	float a, b, c;
 	for (i = 0; i < n-1; i++)
 	{
 		a = temp[i];
@@ -639,8 +641,8 @@ int readParams(char *fname, char *oname, controlStruct *control)
 				fscanf(fin,"%lf",&(control->scint_ts));
 			else if (strcasecmp(param,"SCINT_FREQBW")==0)
 				fscanf(fin,"%lf",&(control->scint_freqbw));	  
-			else if (strcasecmp(param,"FILE")==0)
-				fscanf(fin,"%s",control->fname);
+			//else if (strcasecmp(param,"FILE")==0)
+			//	fscanf(fin,"%s",control->fname);
 			//else if (strcasecmp(param,"TYPE")==0)
 			//	fscanf(fin,"%s",control->type);
 			//else if (strcasecmp(param,"STT_IMJD")==0)
@@ -719,7 +721,6 @@ void initialiseControl(controlStruct *control)
 	//strcpy(control->primaryHeaderParams,"UNKNOWN");
 	//strcpy(control->exact_ephemeris,"UNKNOWN");
 	//strcpy(control->src,"UNKNOWN");
-	strcpy(control->fname,"UNKNOWN");
 	strcpy(control->oname,"UNKNOWN");
 	control->tsub = 0;
 	
@@ -758,6 +759,8 @@ void heatMap (acfStruct *acfStructure)
 	//int dimx = acfStructure.ns;
 	//int dimy = acfStructure.nf; // dimensions 
 	//float tab[dimx*dimy];       // value
+	char caption[1024];
+	sprintf (caption, "%s %.2f %s %s %.2f %s %s %.2f %s", "Freq:", acfStructure->cFreq, "MHz", "BW:", acfStructure->bw, "MHz", "Length:", acfStructure->tint, "s");
   
 	float zmin,zmax;            /* min et max des valeurs de la fonction */
 	float tr[6];                /* matrice utilisee par pgimag */
@@ -766,10 +769,18 @@ void heatMap (acfStruct *acfStructure)
 	int dimy = acfStructure->nchn;
 	double bw = acfStructure->bw;
   
-	zmin=0; zmax=1;
+
+	float heat_l[] = {0.0, 0.2, 0.4, 0.6, 1.0};
+	float heat_r[] = {0.0, 0.5, 1.0, 1.0, 1.0};
+	float heat_g[] = {0.0, 0.0, 0.5, 1.0, 1.0};
+	float heat_b[] = {0.0, 0.0, 0.0, 0.3, 1.0};
 
 	double f1 = acfStructure->cFreq-bw/2.0-2.0*bw/dimy; // MHz
-	double f2 = acfStructure->cFreq+bw/2.0+2.0*bw/dimy; // MHz
+	double f2 = acfStructure->cFreq+bw/2.0-2.0*bw/dimy; // MHz
+	//printf ("f1 f2: %lf %lf\n", f1, f2);
+
+	zmin=0; 
+	zmax=find_peak_value (dimx*dimy, acfStructure->dynPlot);
 	//double f1 = 1241; // MHz
 	//double f2 = 1497; // MHz
 	/*The transformation matrix TR is used to calculate the world
@@ -793,24 +804,29 @@ void heatMap (acfStruct *acfStructure)
 	tr[0]=-0.5;
        	tr[1]=1;
        	tr[2]=0;
-      	tr[3]=f2;
+      	tr[3]=f2+0.5;
       	tr[4]=0;
       	tr[5]=-bw/dimy;
- 
+
 	// plot 
 	//cpgbeg(0,"?",1,1);
 	cpgbeg(0,"2/xs",1,1);
       	cpgsch(1.2); // set character height
       	cpgscf(2); // set character font
+	//cpgswin(0,dimx,164,132); // set window
 	cpgswin(0,dimx,f2,f1); // set window
 	//cpgsvp(0.1,0.9,0.1,0.9); // set viewport
       	//cpgenv(1,dimx,f1,f2,0,0); // set window and viewport and draw labeled frame
-	cpgbox("BCTSIN",10,5,"BCTSIN",50,5);
-      	cpglab("Subintegration","Frequency (MHz)","Freq: 1369.0 MHz BW: -256.000 Length: 3840.0 S/N: 1000.0");
+	cpgbox("BCTSIN",4,4,"BCTSIN",16,8);
+	//cpgbox("BCTSIN",10,5,"BCTSIN",50,5);
+      	cpglab("Subintegration","Frequency (MHz)",caption);
+      	//cpglab("Subintegration","Frequency (MHz)","Freq: 150.0 MHz BW: -32.000 MHz Length: 960.0 s");
 	//cpgtick(0,0,1024,0,1.0/64,0.1,0.2,0,0,"1");
 	//palett(3, -0.4, 0.3);
 	//cpgimag(tab,dimx,dimy,1,dimx,1,dimy,zmin,zmax,tr);
-	cpggray(acfStructure->dynPlot,dimx,dimy,1,dimx,1,dimy,zmin,zmax,tr);
+	cpgctab(heat_l,heat_r,heat_g,heat_b,5,1.0,0.5);
+	cpgimag(acfStructure->dynPlot,dimx,dimy,1,dimx,1,dimy,zmin,zmax,tr);
+	//cpggray(acfStructure->dynPlot,dimx,dimy,1,dimx,1,dimy,zmin,zmax,tr);
 
 	cpgend();
 } 
@@ -873,9 +889,10 @@ int plotDynSpec (char *pname)
 {
 	FILE *fin;
 	char start[128];
-	double bw,cFreq;
+	double tint,bw,cFreq;
 	int nsub,nchn;
 	float val;
+	int n1, n2;
 	float *dynSpec;
 
 	int i;
@@ -884,6 +901,12 @@ int plotDynSpec (char *pname)
 	int dimy;
 	float zmin,zmax;            /* min et max des valeurs de la fonction */
 	float tr[6];                /* matrice utilisee par pgimag */
+
+	float heat_l[] = {0.0, 0.2, 0.4, 0.6, 1.0};
+	float heat_r[] = {0.0, 0.5, 1.0, 1.0, 1.0};
+	float heat_g[] = {0.0, 0.0, 0.5, 1.0, 1.0};
+	float heat_b[] = {0.0, 0.0, 0.0, 0.3, 1.0};
+	char caption[1024];
 
 	if ((fin=fopen(pname,"r"))==NULL)
 	{
@@ -894,7 +917,7 @@ int plotDynSpec (char *pname)
       	// Find the start of dynamic spectrum, which contains basic info
 	while (!feof(fin))
 	{
-		if (fscanf(fin,"%s %d %d %lf %lf",start,&nsub,&nchn,&bw,&cFreq)==5)
+		if (fscanf(fin,"%s %d %d %lf %lf %lf",start,&nsub,&nchn,&bw,&tint,&cFreq)==6)
 		{
 			if (strcasecmp(start,"START")==0)
 			{
@@ -905,10 +928,12 @@ int plotDynSpec (char *pname)
 		//	return 1;
 	}
 
+	sprintf (caption, "%s %.2f %s %s %.2f %s %s %.2f %s", "Freq:", cFreq, "MHz", "BW:", bw, "MHz", "Length:", tint, "s");
+
 	dynSpec = (float*)malloc(sizeof(float)*nsub*nchn);
 
 	i = 0;
-	while (fscanf(fin,"%f",&val)==1)
+	while (fscanf(fin,"%d %d %f", &n1, &n2, &val)==3)
 	{
 		dynSpec[i] = val;
 		i++;
@@ -923,10 +948,12 @@ int plotDynSpec (char *pname)
 	dimx = nsub;
 	dimy = nchn;
   
-	zmin=0; zmax=1;
+
+	zmin=0; 
+	zmax=find_peak_value (dimx*dimy, dynSpec);
 
 	double f1 = cFreq-bw/2.0-2.0*bw/dimy; // MHz
-	double f2 = cFreq+bw/2.0+2.0*bw/dimy; // MHz
+	double f2 = cFreq+bw/2.0-2.0*bw/dimy; // MHz
 	//double f1 = 1241; // MHz
 	//double f2 = 1497; // MHz
 	/*The transformation matrix TR is used to calculate the world
@@ -950,7 +977,7 @@ int plotDynSpec (char *pname)
 	tr[0]=-0.5;
        	tr[1]=1;
        	tr[2]=0;
-      	tr[3]=f2;
+      	tr[3]=f2+0.5;
       	tr[4]=0;
       	tr[5]=-bw/dimy;
  
@@ -962,12 +989,14 @@ int plotDynSpec (char *pname)
 	cpgswin(0,dimx,f2,f1); // set window
 	//cpgsvp(0.1,0.9,0.1,0.9); // set viewport
       	//cpgenv(1,dimx,f1,f2,0,0); // set window and viewport and draw labeled frame
-	cpgbox("BCTSIN",10,5,"BCTSIN",50,5);
-      	cpglab("Subintegration","Frequency (MHz)","Freq: 1369.0 MHz BW: -256.000 Length: 3840.0 S/N: 1000.0");
+	cpgbox("BCTSIN",4,4,"BCTSIN",16,8);
+      	cpglab("Subintegration","Frequency (MHz)",caption);
 	//cpgtick(0,0,1024,0,1.0/64,0.1,0.2,0,0,"1");
 	//palett(3, -0.4, 0.3);
 	//cpgimag(tab,dimx,dimy,1,dimx,1,dimy,zmin,zmax,tr);
-	cpggray(dynSpec,dimx,dimy,1,dimx,1,dimy,zmin,zmax,tr);
+	//cpggray(dynSpec,dimx,dimy,1,dimx,1,dimy,zmin,zmax,tr);
+	cpgctab(heat_l,heat_r,heat_g,heat_b,5,1.0,0.5);
+	cpgimag(dynSpec,dimx,dimy,1,dimx,1,dimy,zmin,zmax,tr);
 
 	cpgend();
 
