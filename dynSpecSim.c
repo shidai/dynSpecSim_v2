@@ -1,4 +1,4 @@
-// functions used to simulate dynamic spectrum  
+// Dynamic spectrum simulator
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
