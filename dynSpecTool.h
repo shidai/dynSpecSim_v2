@@ -6,6 +6,7 @@
 ////#include <gsl/gsl_randist.h>
 //#include "T2toolkit.h"
 #include "cpgplot.h"
+#include "T2toolkit.h"
 
 typedef struct controlStruct {
 	char oname[1024]; // output file name
@@ -23,14 +24,15 @@ typedef struct controlStruct {
 	double cFlux;        // flux density of pulsars, mJy
 }controlStruct;
 
-int readParams(char *fname, char *oname, controlStruct *control);
+int readParams(char *fname, controlStruct *control);
 void initialiseControl(controlStruct *control);
 
 void palett(int TYPE, float CONTRA, float BRIGHT);
 int readData (char *fname, float *data, int n);
-int makePlot (float *data, int n, controlStruct *control);
+int makePlot (float *data, int n, controlStruct *control, char *dname);
+int histogram (float *data, int n, float *x, float *val, float low, float up, int step);
 
-int readParams(char *fname, char *oname, controlStruct *control)
+int readParams(char *fname, controlStruct *control)
 {
 	FILE *fin;
 	char param[1024];
@@ -38,7 +40,7 @@ int readParams(char *fname, char *oname, controlStruct *control)
 	int finished=0;
 
 	// define the output file name
-	strcpy(control->oname,oname);
+	//strcpy(control->oname,oname);
 
 	///////////////////////////////////////
 	if ((fin=fopen(fname,"r"))==NULL)
@@ -167,7 +169,6 @@ void initialiseControl(controlStruct *control)
 	//strcpy(control->primaryHeaderParams,"UNKNOWN");
 	//strcpy(control->exact_ephemeris,"UNKNOWN");
 	//strcpy(control->src,"UNKNOWN");
-	strcpy(control->oname,"UNKNOWN");
 	control->tsub = 0;
 	
 	// Standard defaults
@@ -420,7 +421,7 @@ int readData (char *fname, float *data, int n)
 	return 0;
 } 
 
-int makePlot (float *data, int n, controlStruct *control)
+int makePlot (float *data, int n, controlStruct *control, char *dname)
 {
 	int i, j;
 	int nsub = control->nsub;
@@ -429,18 +430,30 @@ int makePlot (float *data, int n, controlStruct *control)
 	//double bw = control->chanBW*control->nchan;
 	//double cFreq = control->cFreq;
 
-	float *flux;
-	float *x;
+	float *flux; // flux densities
+	float *x;    // x axis of the flux variation
+	float *xHis; // x axis of the histogram
+	float *val;  // data value of the histogram
+	int step = 500; // steps in the histogram
+
+	long seed;
+	float *noise; // white noise
+	float *xHisN; // x axis of the histogram
+	float *valN;  // noise value of the histogram
+
 	flux = (float*)malloc(sizeof(float)*n);
 	x = (float*)malloc(sizeof(float)*n);
+	noise = (float*)malloc(sizeof(float)*n*nsub*nchan);
 
+	seed = TKsetSeed();
 	for (i=0;i<n;i++)
 	{
 		sum = 0;
 		for (j=0;j<nsub*nchan;j++)
 		{
 			sum += data[i*nsub*nchan+j];
-			//printf ("%f\n", data[i*nsub*nchan+j]);
+			noise[i*nsub*nchan+j]=TKgaussDev(&seed);
+			//printf ("%d %f %f\n", i*nsub*nchan+j, data[i*nsub*nchan+j], noise[i*nsub*nchan+j]);
 		}
 		flux[i] = sum/(nsub*nchan);
 		x[i] = (float)(i);
@@ -454,26 +467,78 @@ int makePlot (float *data, int n, controlStruct *control)
 	sprintf (caption, "%s", "Flux density variation");
 
 	// plot 
-	//cpgbeg(0,"?",1,1);
-	cpgbeg(0,"/xs",1,2);
+	//cpgbeg(0,"/xs",1,1);
+	cpgbeg(0,dname,1,2);
       	cpgsch(1.2); // set character height
       	cpgscf(2); // set character font
-	//cpgswin(0,1,0,1); // set window
-	//cpgsvp(0.1,0.9,0.1,0.9); // set viewport
-      	cpgenv(0,n,0,2,0,1); // set window and viewport and draw labeled frame
-	//cpgbox("BCTSIN",50,10,"BCTSIN",50,10);
+      	cpgenv(0,n,0,3,0,1); // set window and viewport and draw labeled frame
+	//cpgsvp(0.1,0.5,0.5,0.9); // set viewport
+	//cpgswin(0.0,10.0,0.0,2.0); // set window, must be float number
+	//cpgbox("BCTSN",0.0,0,"BCTSN",0.0,0);
       	cpglab("Time","Flux (mJy)",caption);
 	cpgpt(n,x,flux,9);
-	cpgend();
 
 	////////////////////////////
-      	//cpgsch(1.5); // set character height
-      	//cpgscf(2); // set character font
-      	cpgenv(0,n,0,2,0,1); // set window and viewport and draw labeled frame
-      	//cpglab("Time","Flux (mJy)",caption);
-	cpgpt(n,x,flux,9);
+	// make histogram
+	xHis = (float*)malloc(sizeof(float)*step);
+	val = (float*)malloc(sizeof(float)*step);
+	xHisN = (float*)malloc(sizeof(float)*step);
+	valN = (float*)malloc(sizeof(float)*step);
+	histogram (noise, nsub*nchan*n, xHisN, valN, -5.0, 5.0, step);
+	histogram (data, nsub*nchan*n, xHis, val, -5.0, 5.0, step);
+
+	sprintf (caption, "%s", "Flux density histogram");
+      	cpgenv(-5,5,0,4500,0,1); // set window and viewport and draw labeled frame
+      	cpglab("Flux (mJy)","Number",caption);
+	cpgbin(step,xHis,val,0);
+	cpgsci(2);
+	cpgbin(step,xHisN,valN,0);
 	cpgend();
 	///////////////////////////////////////////////////////
+	
 	free(flux);
+	free(x);
+	free(xHis);
+	free(val);
+	free(noise);
+	free(xHisN);
+	free(valN);
+
+	return 0;
+}
+
+int histogram (float *data, int n, float *x, float *val, float low, float up, int step)
+{
+	int i,j,count;
+	float width;
+	float *temp;
+
+	temp = (float*)malloc(sizeof(float)*(step+1));
+
+	width = (up-low)/step;
+	for (i=0; i<step; i++)
+	{
+		x[i] = low + i*width + width/2.0;
+	}
+
+	for (i=0; i<=step; i++)
+	{
+		temp[i] = low + i*width;
+	}
+
+	for (i=0; i<step; i++)
+	{
+		count = 0;
+		for (j=0; j<n; j++)
+		{
+			if (data[j]>=temp[i] && data[j]<temp[i+1])
+			{
+				count += 1;
+			}
+		}
+		val [i] = count;
+	}
+
+	free(temp);
 	return 0;
 }

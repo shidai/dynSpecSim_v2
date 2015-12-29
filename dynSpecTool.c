@@ -14,7 +14,7 @@ int main (int argc, char* argv[])
 
 	char fname[1024];   // dynamic spectrum
 	char pname[1024];   // read in parameter file
-	char oname[1024];   // output file
+	char dname[1024];   // graphics device
 	int i;
 	int index, n;
 
@@ -27,7 +27,7 @@ int main (int argc, char* argv[])
 		{
 			index = i + 1;
 			n = 0;
-			while ( (index + n) < argc && strcmp(argv[index+n],"-p") != 0 )
+			while ( (index + n) < argc && strcmp(argv[index+n],"-p") != 0 && strcmp(argv[index+n],"-dev") != 0 )
 			{
 				n++;
 			}
@@ -37,16 +37,16 @@ int main (int argc, char* argv[])
 			strcpy(pname,argv[++i]);
 			printf ("Parameters are in %s\n", pname);
 		}
-		else if (strcmp(argv[i],"-o")==0)
+		else if (strcmp(argv[i],"-dev")==0)
 		{
-			strcpy(oname,argv[++i]);
-			printf ("Output are in %s\n", oname);
+			strcpy(dname,argv[++i]);
+			printf ("Graphic device: %s\n", dname);
 		}
 	}
 
 		
 	initialiseControl(&control);
-	readParams (pname,oname,&control);
+	readParams (pname,&control);
 
 	data = (float*)malloc(sizeof(float)*n*control.nsub*control.nchan);
 	
@@ -58,7 +58,7 @@ int main (int argc, char* argv[])
 		readData(fname,data,i-index);
 	}
 
-	makePlot (data, n, &control);
+	makePlot (data, n, &control, dname);
 
 	free(data);
 
