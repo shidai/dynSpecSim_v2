@@ -42,6 +42,7 @@ typedef struct acfStruct {
 typedef struct controlStruct {
 	int n; // number of dynamic spectrum
 	char oname[1024]; // output file name
+	char dname[1024]; // graphics device
 
 	double cFreq;  // observing central frequency
 	double tsub;  // subintegration time
@@ -68,12 +69,12 @@ void preAllocateMemory (acfStruct *acfStructure);
 float find_peak_value (int n, float *s);
 int calSize (acfStruct *acfStructure, double *size, double *ratio);
 int windowSize (acfStruct *acfStructure, double *size);
-int readParams(char *fname, char *oname, int n, controlStruct *control);
+int readParams(char *fname, char *oname, char *dname, int n, controlStruct *control);
 void initialiseControl(controlStruct *control);
 
-void heatMap (acfStruct *acfStructure);
+void heatMap (acfStruct *acfStructure, char *dname);
 void palett(int TYPE, float CONTRA, float BRIGHT);
-int plotDynSpec (char *pname);
+int plotDynSpec (char *pname, char *dname);
 
 float chiSquare (float *data, int n, float noise);
 float moduIndex (float *data, int n);
@@ -405,14 +406,29 @@ void deallocateMemory (acfStruct *acfStructure)
 
 int simDynSpec (acfStruct *acfStructure, long seed, int nDynSpec)
 {
-	printf ("Simulating dynamic spectrum\n");
 	int nf = acfStructure->nf;
 	int ns = acfStructure->ns;
 	int nchn = acfStructure->nchn;
 	int nsubint = acfStructure->nsubint;
+	double bw = acfStructure->bw;
+	double tint = acfStructure->tint;
+	double f0 = acfStructure->f0;
+	double t0 = acfStructure->t0;
 
-	int i;
-	int j;
+	int i, ii;
+	int j, jj;
+	float temp;
+	int tempt = (int)((tint/nsubint)/t0);  // number of pixels to average
+	int tempf = (int)((bw/nchn)/f0); // number of pixels to average
+
+	int n = 0;
+	double sum = 0.0;
+
+	double rand, rand2;
+	int nf0;
+	int ns0;
+
+	printf ("Simulating dynamic spectrum\n");
 	//seed = TKsetSeed();
 	//printf ("seed %ld\n",seed);
 
@@ -433,9 +449,6 @@ int simDynSpec (acfStruct *acfStructure, long seed, int nDynSpec)
 	idft2d (acfStructure);
 
 	// form the matrix and normalize
-	int n = 0;
-	double sum = 0.0;
-
 	for (i = 0; i < nf; i++)
 	{
 		for (j = 0; j < ns; j++)
@@ -452,24 +465,90 @@ int simDynSpec (acfStruct *acfStructure, long seed, int nDynSpec)
 	printf ("Normalization %.10lf\n",sum);
 
 	// choose a subwindow
-	double rand, rand2;
 	//printf ("seed %ld\n",seed);
 	rand = TKgaussDev(&seed);
 	rand2 = rand - floor(rand);
 	//printf ("rand %lf\n",rand);
 
-	int nf0 = (int)(rand2*(nf-nchn));
-	int ns0 = (int)(rand2*(ns-nsubint));
-	
-	for (i = 0; i < nchn; i++)
+	if (f0 >= (bw/nchn) && t0 >= (tint/nsubint))
 	{
-		for (j = 0; j < nsubint; j++)
+		printf ("f0 >= (bw/nchn) && t0 >= (tint/nsubint)\n");
+		nf0 = (int)(rand2*(nf-nchn));
+		ns0 = (int)(rand2*(ns-nsubint));
+	
+		for (i = 0; i < nchn; i++)
 		{
-			acfStructure->dynSpecWindow[i][j] = acfStructure->dynSpec[i+nf0][j+ns0]/sum;
-			acfStructure->dynPlot[nDynSpec][i*nsubint+j] = (float)(acfStructure->dynSpecWindow[i][j]*acfStructure->cFlux+acfStructure->whiteLevel*TKgaussDev(&seed));   // add in noise here
-			//printf ("noise rand %lf\n",TKgaussDev(&seed));
-			//acfStructure->dynPlot[i*nsubint+j] = (float)(acfStructure->dynSpecWindow[i][j]);
-			//fprintf (fp, "%.10lf  ", acfStructure->dynSpec[i][j]/sum);
+			for (j = 0; j < nsubint; j++)
+			{
+				acfStructure->dynSpecWindow[i][j] = acfStructure->dynSpec[i+nf0][j+ns0]/sum;
+				acfStructure->dynPlot[nDynSpec][i*nsubint+j] = (float)(acfStructure->dynSpecWindow[i][j]*acfStructure->cFlux+acfStructure->whiteLevel*TKgaussDev(&seed));   // add in noise here
+				//printf ("noise rand %lf\n",TKgaussDev(&seed));
+				//acfStructure->dynPlot[i*nsubint+j] = (float)(acfStructure->dynSpecWindow[i][j]);
+				//fprintf (fp, "%.10lf  ", acfStructure->dynSpec[i][j]/sum);
+			}
+		}
+	}
+	else if (f0 >= (bw/nchn) && t0 < (tint/nsubint))
+	{
+		printf ("f0 >= (bw/nchn) && t0 < (tint/nsubint)\n");
+		nf0 = (int)(rand2*(nf-nchn));
+		ns0 = (int)(rand2*(ns-(int)(tint/t0)));
+
+		for (i = 0; i < nchn; i++)
+		{
+			for (j = 0; j < nsubint; j++)
+			{
+				temp = 0.0;
+				for (jj=0; jj<tempt; jj++)
+				{
+					temp += acfStructure->dynSpec[i+nf0][j*tempt+ns0+jj];
+				}
+				acfStructure->dynSpecWindow[i][j] = temp/(sum*tempt);
+				acfStructure->dynPlot[nDynSpec][i*nsubint+j] = (float)(acfStructure->dynSpecWindow[i][j]*acfStructure->cFlux+acfStructure->whiteLevel*TKgaussDev(&seed));   // add in noise here
+			}
+		}
+	}
+	else if (f0 < (bw/nchn) && t0 >= (tint/nsubint))
+	{
+		printf ("f0 < (bw/nchn) && t0 >= (tint/nsubint)\n");
+		nf0 = (int)(rand2*(nf-(int)(bw/f0)));
+		ns0 = (int)(rand2*(ns-nsubint));
+
+		for (i = 0; i < nchn; i++)
+		{
+			for (j = 0; j < nsubint; j++)
+			{
+				temp = 0.0;
+				for (ii=0; ii<tempf; ii++)
+				{
+						temp += acfStructure->dynSpec[i*tempf+nf0+ii][j+ns0];
+				}
+				acfStructure->dynSpecWindow[i][j] = temp/(sum*tempf);
+				acfStructure->dynPlot[nDynSpec][i*nsubint+j] = (float)(acfStructure->dynSpecWindow[i][j]*acfStructure->cFlux+acfStructure->whiteLevel*TKgaussDev(&seed));   // add in noise here
+			}
+		}
+	}
+	else
+	{
+		printf ("f0 < (bw/nchn) && t0 < (tint/nsubint)\n");
+		nf0 = (int)(rand2*(nf-(int)(bw/f0)));
+		ns0 = (int)(rand2*(ns-(int)(tint/t0)));
+
+		for (i = 0; i < nchn; i+=(int)((bw/nchn)/f0))
+		{
+			for (j = 0; j < nsubint; j+=(int)((tint/nsubint)/t0))
+			{
+				temp = 0.0;
+				for (ii=0; ii<tempf; ii++)
+				{
+					for (jj=0; jj<tempt; jj++)
+					{
+						temp += acfStructure->dynSpec[i*tempf+nf0+ii][j*tempt+ns0+jj];
+					}
+				}
+				acfStructure->dynSpecWindow[i][j] = temp/(sum*tempf*tempt);
+				acfStructure->dynPlot[nDynSpec][i*nsubint+j] = (float)(acfStructure->dynSpecWindow[i][j]*acfStructure->cFlux+acfStructure->whiteLevel*TKgaussDev(&seed));   // add in noise here
+			}
 		}
 	}
 
@@ -529,12 +608,22 @@ int calSize (acfStruct *acfStructure, double *size, double *ratio)
 	double steps = acfStructure->steps;
 	double stepf = acfStructure->stepf;
 
+	// for calculate box size
 	int nf = (int)(size[0]*2/stepf)+1;
 	int ns = (int)(size[1]*2/steps)+1;
 
-	float  s[ns], acfs[ns], smax;
-	float  f[nf], acff[nf], fmax;
+	float  smax;
+	float  fmax;
+	float  *s, *acfs;
+	float  *f, *acff;
+	//float  s[ns], acfs[ns];
+	//float  f[nf], acff[nf];
 	//double c; // value at the center
+
+	s = (float *)malloc(sizeof(float)*ns);
+	f = (float *)malloc(sizeof(float)*nf);
+	acfs = (float *)malloc(sizeof(float)*ns);
+	acff = (float *)malloc(sizeof(float)*nf);
 
 	for (i = 0; i < ns; i++)
 	{
@@ -564,6 +653,11 @@ int calSize (acfStruct *acfStructure, double *size, double *ratio)
 	ratio[0] = fmax;
 	ratio[1] = smax;
 
+	free(s);
+	free(f);
+	free(acfs);
+	free(acff);
+
 	return 0;
 }
 
@@ -577,7 +671,6 @@ float find_peak_value (int n, float *s)
 		temp[i] = s[i];
 	}
 
-	
 	float a, b, c;
 	for (i = 0; i < n-1; i++)
 	{
@@ -598,6 +691,13 @@ void preAllocateMemory (acfStruct *acfStructure)
 	double bw, f0, tint, t0;
 	int nchn, nsubint;
 
+	double steps;
+	double stepf;
+
+	double size[2]; // sampling boundary
+
+	int nf, ns;
+
 	bw = acfStructure->bw;
 	f0 = acfStructure->f0;
 	tint = acfStructure->tint;
@@ -606,28 +706,44 @@ void preAllocateMemory (acfStruct *acfStructure)
 	nchn = acfStructure->nchn;
 	nsubint = acfStructure->nsubint;
 
-	double steps = (tint/t0)/nsubint;
-	double stepf = (bw/f0)/nchn;
+	// take f0 < bw_chn into account
+	if (f0 >= (bw/nchn))
+	{
+		stepf = (bw/f0)/nchn;
+	}
+	else
+	{
+		stepf = 1.0;
+	}
+	
+	if (t0 >= (tint/nsubint))
+	{
+		steps = (tint/t0)/nsubint;
+	}
+	else
+	{
+		steps = 1.0;
+	}
+	
 	acfStructure->steps = steps;
 	acfStructure->stepf = stepf;
 	//printf ("%lf\n", steps);
 	//printf ("%lf\n", stepf);
 	
-	double size[2]; // sampling boundary
 	windowSize (acfStructure, size);
 	printf ("f0 size: %lf\n", size[0]);
 	printf ("s0 size: %lf\n", size[1]);
 
-	int nf = (int)(size[0]*2/stepf)+1;
-	int ns = (int)(size[1]*2/steps)+1;
-	//printf ("%d\n", ns);
-	//printf ("%d\n", nf);
+	nf = (int)(size[0]*2/stepf)+1;
+	ns = (int)(size[1]*2/steps)+1;
+	printf ("ns: %d\n", ns);
+	printf ("nf: %d\n", nf);
 
 	acfStructure->ns = ns;
 	acfStructure->nf = nf;
 }
 
-int readParams(char *fname, char *oname, int n, controlStruct *control)
+int readParams(char *fname, char *oname, char *dname, int n, controlStruct *control)
 {
 	FILE *fin;
 	char param[1024];
@@ -636,6 +752,7 @@ int readParams(char *fname, char *oname, int n, controlStruct *control)
 
 	// define the output file name
 	strcpy(control->oname,oname);
+	strcpy(control->dname,dname);
 
 	control->n = n;
 
@@ -767,6 +884,7 @@ void initialiseControl(controlStruct *control)
 	//strcpy(control->exact_ephemeris,"UNKNOWN");
 	//strcpy(control->src,"UNKNOWN");
 	strcpy(control->oname,"UNKNOWN");
+	strcpy(control->dname,"1/xs");
 	control->tsub = 0;
 	
 	control->n = 1; // simulate 1 dynamic spectrum by default
@@ -800,7 +918,7 @@ void initialiseControl(controlStruct *control)
   // Note that the DM comes from the ephemeris
 }
 
-void heatMap (acfStruct *acfStructure)
+void heatMap (acfStruct *acfStructure, char *dname)
 {
 	//int i,j;                     
 	//int dimx = acfStructure.ns;
@@ -857,7 +975,8 @@ void heatMap (acfStruct *acfStructure)
 
 	// plot 
 	//cpgbeg(0,"?",1,1);
-	cpgbeg(0,"2/xs",1,1);
+	cpgbeg(0,dname,1,1);
+	//cpgbeg(0,"2/xs",1,1);
       	cpgsch(1.2); // set character height
       	cpgscf(2); // set character font
 	//cpgswin(0,dimx,164,132); // set window
@@ -932,7 +1051,7 @@ void palett(int TYPE, float CONTRA, float BRIGHT)
 	}
 }
 
-int plotDynSpec (char *pname)
+int plotDynSpec (char *pname, char *dname)
 {
 	FILE *fin;
 	char start[128];
@@ -1030,7 +1149,8 @@ int plotDynSpec (char *pname)
  
 	// plot 
 	//cpgbeg(0,"?",1,1);
-	cpgbeg(0,"2/xs",1,1);
+	cpgbeg(0,dname,1,1);
+	//cpgbeg(0,"2/xs",1,1);
       	cpgsch(1.2); // set character height
       	cpgscf(2); // set character font
 	cpgswin(0,dimx,f2,f1); // set window
@@ -1097,11 +1217,9 @@ int qualifyVar (acfStruct *acfStructure, controlStruct *control)
 
 	// calculate chi-square
 	chiS0 = chiSquare (flux0, n*nsub*nchan, control->whiteLevel);
-	chiS = chiSquare (flux, n, control->whiteLevel/sqrt(nsub*nchan));  // need to check the noise 
 
 	// calculate modulation index
 	m0 = moduIndex (flux0, n*nsub*nchan);
-	m = moduIndex (flux, n);
 
 	if (n == 1)
 	{
@@ -1109,6 +1227,8 @@ int qualifyVar (acfStruct *acfStructure, controlStruct *control)
 	}
 	else
 	{
+		m = moduIndex (flux, n);
+		chiS = chiSquare (flux, n, control->whiteLevel/sqrt(nsub*nchan));  // need to check the noise 
 		printf ("%f %f %f %f\n", chiS0, m0, chiS, m);
 	}
 

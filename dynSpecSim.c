@@ -16,6 +16,7 @@ int main (int argc, char* argv[])
 	char fname[1024];   // read in parameter file
 	char oname[1024];   // output file name
 	char pname[1024];   // file to plot
+	char dname[1024];   // graphics device
 	int i;
 	int n = 1;  // number of dynamic spectrum to simulate
 
@@ -53,6 +54,11 @@ int main (int argc, char* argv[])
 		{
 			noplot = 1; // Don't show dynamic spetrum while simulationg
 		}
+		else if (strcmp(argv[i],"-dev")==0)
+		{
+			strcpy(dname,argv[++i]);
+			printf ("Graphic device: %s\n", dname);
+		}
 	}
 
 	if (plotMode==0)
@@ -60,7 +66,7 @@ int main (int argc, char* argv[])
 		// Simulate dynamic spectrum
 		// read parameters
 		initialiseControl(&control);
-		readParams (fname,oname,n,&control);
+		readParams (fname,oname,dname,n,&control);
 		printf ("Finished reading parameters.\n");
 
 		// simulate dynamic spectra
@@ -69,7 +75,7 @@ int main (int argc, char* argv[])
 		if (noplot==0 && n == 1)
 		{
 			// plot while simulating
-			heatMap (&acfStructure);
+			heatMap (&acfStructure, dname);
 		}
 
 		qualifyVar (&acfStructure, &control);
@@ -79,7 +85,7 @@ int main (int argc, char* argv[])
 	}
 	else
 	{
-		plotDynSpec(pname);
+		plotDynSpec(pname, dname);
 	}
 
 	return 0;
