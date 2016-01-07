@@ -17,9 +17,14 @@ int main (int argc, char* argv[])
 	char oname[1024];   // output file name
 	char pname[1024];   // file to plot
 	int i;
+	int n = 1;  // number of dynamic spectrum to simulate
 
 	int plotMode = 0;  // plot existing dynamic spectrum, off by default
 	int noplot = 0;  // show dynamic spectrum while simulationg, on by default
+
+	long seed;
+	seed = TKsetSeed();
+
 	// read options
 	for (i=0;i<argc;i++)
 	{
@@ -31,7 +36,12 @@ int main (int argc, char* argv[])
 		else if (strcmp(argv[i],"-o")==0)
 		{
 			strcpy(oname,argv[++i]);
-			printf ("Dynamic spectrum is output into %s\n", oname);
+			//printf ("Dynamic spectrum is output into %s\n", oname);
+		}
+		else if (strcmp(argv[i],"-n")==0)
+		{
+			n = atoi (argv[++i]);
+			printf ("Number of dynamic spectrum to simulate %d\n", n);
 		}
 		else if (strcmp(argv[i],"-p")==0) // just plot 
 		{
@@ -50,17 +60,19 @@ int main (int argc, char* argv[])
 		// Simulate dynamic spectrum
 		// read parameters
 		initialiseControl(&control);
-		readParams (fname,oname,&control);
+		readParams (fname,oname,n,&control);
 		printf ("Finished reading parameters.\n");
 
 		// simulate dynamic spectra
-		calculateScintScale (&acfStructure, &control);
+		calculateScintScale (&acfStructure, &control, seed);
 
-		if (noplot==0)
+		if (noplot==0 && n == 1)
 		{
 			// plot while simulating
 			heatMap (&acfStructure);
 		}
+
+		qualifyVar (&acfStructure, &control);
 
 		// deallocate memory
 		deallocateMemory (&acfStructure);

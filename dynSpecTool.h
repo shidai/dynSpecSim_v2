@@ -32,6 +32,9 @@ int readData (char *fname, float *data, int n);
 int makePlot (float *data, int n, controlStruct *control, char *dname);
 int histogram (float *data, int n, float *x, float *val, float low, float up, int step);
 
+float chiSquare (float *data, int n, float noise);
+float moduIndex (float *data, int n);
+
 int readParams(char *fname, controlStruct *control)
 {
 	FILE *fin;
@@ -430,6 +433,9 @@ int makePlot (float *data, int n, controlStruct *control, char *dname)
 	//double bw = control->chanBW*control->nchan;
 	//double cFreq = control->cFreq;
 
+	float *flux0;    // flux density of each pixel
+	float *x0;    // x axis of the flux variation
+
 	float *flux; // flux densities
 	float *x;    // x axis of the flux variation
 	float *xHis; // x axis of the histogram
@@ -441,6 +447,17 @@ int makePlot (float *data, int n, controlStruct *control, char *dname)
 	float *xHisN; // x axis of the histogram
 	float *valN;  // noise value of the histogram
 
+	float chiS0;
+	float chiS;
+
+	float m0;
+	float m;
+
+	char caption[1024];
+	char text[1024];
+
+	flux0 = (float*)malloc(sizeof(float)*n*nsub*nchan);
+	x0 = (float*)malloc(sizeof(float)*n*nsub*nchan);
 	flux = (float*)malloc(sizeof(float)*n);
 	x = (float*)malloc(sizeof(float)*n);
 	noise = (float*)malloc(sizeof(float)*n*nsub*nchan);
@@ -454,28 +471,61 @@ int makePlot (float *data, int n, controlStruct *control, char *dname)
 			sum += data[i*nsub*nchan+j];
 			noise[i*nsub*nchan+j]=TKgaussDev(&seed);
 			//printf ("%d %f %f\n", i*nsub*nchan+j, data[i*nsub*nchan+j], noise[i*nsub*nchan+j]);
+		
 		}
 		flux[i] = sum/(nsub*nchan);
 		x[i] = (float)(i);
 		//printf ("%f %f\n", x[i], flux[i]);
 	}
 
+	for (i=0; i<2*n; i++)
+	{
+		flux0[i] = data[i];
+		x0[i] = (float)(i);
+	}
+
+	// calculate chi-square
+	chiS0 = chiSquare (data, n*nsub*nchan, control->whiteLevel);
+	chiS = chiSquare (flux, n, control->whiteLevel/sqrt(nsub*nchan));  // need to check the noise 
+
+	// calculate modulation index
+	m0 = moduIndex (data, n*nsub*nchan);
+	m = moduIndex (flux, n);
+
 	// make plots
-
-	char caption[1024];
-
-	sprintf (caption, "%s", "Flux density variation");
 
 	// plot 
 	//cpgbeg(0,"/xs",1,1);
-	cpgbeg(0,dname,1,2);
+	cpgbeg(0,dname,1,3);
+
+      	cpgsch(2); // set character height
+      	cpgscf(2); // set character font
+      	cpgenv(0,2*n,-1,8.0,0,1); // set window and viewport and draw labeled frame
+	sprintf (caption, "%s", "Flux density variation");
+	sprintf (text, "Reduced Chi-square %.2f", chiS0);
+	cpgtext (10.0,6.5,text);
+	sprintf (text, "Modulation index %.2f", m0);
+	cpgtext (1400.0,6.5,text);
+      	cpglab("Time","Flux (mJy)",caption);
+
       	cpgsch(1.2); // set character height
+	cpgpt(2*n,x0,flux0,9);
+
+	// averaged flux density variation
+      	cpgsch(2); // set character height
       	cpgscf(2); // set character font
       	cpgenv(0,n,0,3,0,1); // set window and viewport and draw labeled frame
 	//cpgsvp(0.1,0.5,0.5,0.9); // set viewport
 	//cpgswin(0.0,10.0,0.0,2.0); // set window, must be float number
 	//cpgbox("BCTSN",0.0,0,"BCTSN",0.0,0);
+	sprintf (caption, "%s", "Averaged flux density variation");
+	sprintf (text, "Reduced Chi-square %.2f", chiS);
+	cpgtext (10.0,2.6,text);
+	sprintf (text, "Modulation index %.2f", m);
+	cpgtext (700.0,2.6,text);
       	cpglab("Time","Flux (mJy)",caption);
+
+      	cpgsch(1.2); // set character height
 	cpgpt(n,x,flux,9);
 
 	////////////////////////////
@@ -487,15 +537,20 @@ int makePlot (float *data, int n, controlStruct *control, char *dname)
 	histogram (noise, nsub*nchan*n, xHisN, valN, -5.0, 5.0, step);
 	histogram (data, nsub*nchan*n, xHis, val, -5.0, 5.0, step);
 
-	sprintf (caption, "%s", "Flux density histogram");
+      	cpgsch(2); // set character height
+      	cpgscf(2); // set character font
       	cpgenv(-5,5,0,4500,0,1); // set window and viewport and draw labeled frame
+	sprintf (caption, "%s", "Flux density histogram");
       	cpglab("Flux (mJy)","Number",caption);
 	cpgbin(step,xHis,val,0);
 	cpgsci(2);
 	cpgbin(step,xHisN,valN,0);
-	cpgend();
 	///////////////////////////////////////////////////////
-	
+	cpgend();
+	////////////////////
+
+	free(x0);
+	free(flux0);
 	free(flux);
 	free(x);
 	free(xHis);
@@ -541,4 +596,53 @@ int histogram (float *data, int n, float *x, float *val, float low, float up, in
 
 	free(temp);
 	return 0;
+}
+
+float chiSquare (float *data, int n, float noise)
+{
+	int i;
+
+	float ave;
+	float chiS;
+	
+	ave = 0.0;
+	for (i=0; i<n; i++)
+	{
+		ave += data[i];
+	}
+	ave = ave/n;
+
+	chiS = 0.0;
+	for (i=0; i<n; i++)
+	{
+		chiS += pow(data[i]-ave,2)/pow(noise,2);
+	}
+
+	return chiS/(n-1);
+}
+
+float moduIndex (float *data, int n)
+{
+	int i;
+
+	float ave, devi;
+	float m;
+
+	ave = 0.0;
+	for (i=0; i<n; i++)
+	{
+		ave += data[i];
+	}
+	ave = ave/n;
+
+	devi = 0.0;
+	for (i=0; i<n; i++)
+	{
+		devi += pow(data[i]-ave,2);
+	}
+	devi = sqrt(devi/n);
+
+	m = devi/ave;
+
+	return m;
 }

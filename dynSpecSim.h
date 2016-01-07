@@ -9,6 +9,8 @@
 #include "cpgplot.h"
 
 typedef struct acfStruct {
+	int n; // number of dynamic spectrum
+
 	double cFlux;  // pulsar flux density
 	double whiteLevel;  // white noise level
 
@@ -34,10 +36,11 @@ typedef struct acfStruct {
 	fftw_complex *intensity;  // intensity 
 	double **dynSpec; // dynamic spectrum 
 	double **dynSpecWindow; // dynamic spectrum window, nchn*nsubint dimension
-	float *dynPlot; // dynamic spectrum for pgplot
+	float **dynPlot; // dynamic spectrum for pgplot
 } acfStruct;
 
 typedef struct controlStruct {
+	int n; // number of dynamic spectrum
 	char oname[1024]; // output file name
 
 	double cFreq;  // observing central frequency
@@ -59,32 +62,37 @@ int calACF (acfStruct *acfStructure);
 int power (acfStruct *acfStructure);
 void deallocateMemory (acfStruct *acfStructure);
 void allocateMemory (acfStruct *acfStructure);
-int simDynSpec (acfStruct *acfStructure);
-int calculateScintScale (acfStruct *acfStructure, controlStruct *control);
+int simDynSpec (acfStruct *acfStructure, long seed, int nDynSpec);
+int calculateScintScale (acfStruct *acfStructure, controlStruct *control, long seed);
 void preAllocateMemory (acfStruct *acfStructure);
 float find_peak_value (int n, float *s);
 int calSize (acfStruct *acfStructure, double *size, double *ratio);
 int windowSize (acfStruct *acfStructure, double *size);
-int readParams(char *fname, char *oname, controlStruct *control);
+int readParams(char *fname, char *oname, int n, controlStruct *control);
 void initialiseControl(controlStruct *control);
 
 void heatMap (acfStruct *acfStructure);
 void palett(int TYPE, float CONTRA, float BRIGHT);
 int plotDynSpec (char *pname);
 
-int calculateScintScale (acfStruct *acfStructure, controlStruct *control)
+float chiSquare (float *data, int n, float noise);
+float moduIndex (float *data, int n);
+
+int calculateScintScale (acfStruct *acfStructure, controlStruct *control, long seed)
 {
 	FILE *fin;
 	int i, j;
 
 	printf ("Starting simulating dynamic spectrum\n");
+	acfStructure->n = control->n; 
+
 	acfStructure->cFlux = control->cFlux; // mJy
 	acfStructure->whiteLevel = control->whiteLevel; // mJy
 	acfStructure->cFreq = control->cFreq; // MHz
 	acfStructure->bw = fabs(control->chanBW*control->nchan); // MHz
 	acfStructure->f0 = control->scint_freqbw;  // MHz
 	acfStructure->tint = control->nsub*control->tsub;  // s
-	acfStructure->t0 = control->scint_ts; // MHz
+	acfStructure->t0 = control->scint_ts; // s
 	printf ("Scintillation bandwidth: %lf (MHz)\n", acfStructure->f0);
 	printf ("Scintillation time-scale: %lf (s)\n", acfStructure->t0);
 
@@ -94,31 +102,47 @@ int calculateScintScale (acfStruct *acfStructure, controlStruct *control)
 	preAllocateMemory (acfStructure);
 	allocateMemory (acfStructure);
 
-	calACF (acfStructure);
-	power (acfStructure);
-	simDynSpec (acfStructure);
-
-	if ((fin=fopen(control->oname,"w"))==NULL)
+	for (i=0; i<acfStructure->n; i++)
 	{
-		printf ("Can't open output file!\n");
-		exit(1);
+		acfStructure->phaseGradient = TKgaussDev(&seed);
+		//acfStructure->phaseGradient = 0.0;
+		printf ("Phase gradient: %lf\n", acfStructure->phaseGradient);
+
+		calACF (acfStructure);
+		power (acfStructure);
+		simDynSpec (acfStructure, seed, i);
 	}
 
-	fprintf(fin,"INFO nsub nchn bandwidth tint cFreq\n");
-	fprintf(fin,"START %d %d %lf %lf %lf\n",acfStructure->nsubint,acfStructure->nchn,acfStructure->bw,acfStructure->tint,acfStructure->cFreq);
-
-	for (i=0;i<acfStructure->nchn;i++)
+	if (acfStructure->n == 1)
 	{
-		for (j=0;j<acfStructure->nsubint;j++)
+		printf ("Dynamic spectrum is output into %s\n", control->oname);
+
+		if ((fin=fopen(control->oname,"w"))==NULL)
 		{
-			fprintf(fin,"%d %d %lf\n", i, j, acfStructure->dynPlot[i*acfStructure->nsubint+j]);
+			printf ("Can't open output file!\n");
+			exit(1);
+		}
+
+		fprintf(fin,"INFO nsub nchn bandwidth tint cFreq\n");
+		fprintf(fin,"START %d %d %lf %lf %lf\n",acfStructure->nsubint,acfStructure->nchn,acfStructure->bw,acfStructure->tint,acfStructure->cFreq);
+
+		for (i=0;i<acfStructure->nchn;i++)
+		{
+			for (j=0;j<acfStructure->nsubint;j++)
+			{
+				fprintf(fin,"%d %d %lf\n", i, j, acfStructure->dynPlot[0][i*acfStructure->nsubint+j]);
+			}
+		}
+
+		if (fclose(fin))
+		{
+			printf ("Can't close output file!\n");
+			exit(1);
 		}
 	}
-
-	if (fclose(fin))
+	else
 	{
-		printf ("Can't close output file!\n");
-		exit(1);
+		printf ("%d dynamic spectra are simulated\n", acfStructure->n);
 	}
 
 	return 0;
@@ -130,20 +154,21 @@ int calACF (acfStruct *acfStructure)
 	int i,j;
 	int ns = acfStructure->ns;
 	int nf = acfStructure->nf;
-	double steps = acfStructure->steps;
-	double stepf = acfStructure->stepf;
 	double *acf;
 	acf = (double *)malloc(sizeof(double)*ns*nf);
 
-	for (i = 0; i < ns; i++)
-	{
-		acfStructure->s[i] = -acfStructure->size[1]+i*steps;
-	}
+	// moved to allocateMemory
+	//double steps = acfStructure->steps;
+	//double stepf = acfStructure->stepf;
+	//for (i = 0; i < ns; i++)
+	//{
+	//	acfStructure->s[i] = -acfStructure->size[1]+i*steps;
+	//}
 
-      	for (i = 0; i < nf; i++)
-	{
-		acfStructure->f[i] = -acfStructure->size[0]+i*stepf;
-	}
+      	//for (i = 0; i < nf; i++)
+	//{
+	//	acfStructure->f[i] = -acfStructure->size[0]+i*stepf;
+	//}
 
 	double rand;
 	rand = acfStructure->phaseGradient;
@@ -253,7 +278,7 @@ int power (acfStruct *acfStructure)
 	int ns = acfStructure->ns;
 	/////////////////////////////////////////////////////////////////////////////////
 
-  fftw_complex *out;
+	fftw_complex *out;
 	
 	out = (fftw_complex*)fftw_malloc(sizeof(fftw_complex)*nf*((int)(ns/2)+1));
 	
@@ -293,9 +318,14 @@ int power (acfStruct *acfStructure)
 
 void allocateMemory (acfStruct *acfStructure)
 {
+	int n; // number of dynamic spectrum
 	int ns, nf;
 	int nchn, nsubint;
 
+	double steps = acfStructure->steps;
+	double stepf = acfStructure->stepf;
+
+	n = acfStructure->n;
 	ns = acfStructure->ns;
 	nf = acfStructure->nf;
 	nchn = acfStructure->nchn;
@@ -311,6 +341,9 @@ void allocateMemory (acfStruct *acfStructure)
 	acfStructure->dynSpec = (double **)fftw_malloc(sizeof(double *)*nf);
 	acfStructure->dynSpecWindow = (double **)fftw_malloc(sizeof(double *)*nchn);
 
+	//acfStructure->dynPlot = (float *)malloc(sizeof(float)*nsubint*nchn);
+	acfStructure->dynPlot = (float **)malloc(sizeof(float *)*n);
+
 	int i;
 	for (i = 0; i < nf; i++)
 	{
@@ -322,11 +355,26 @@ void allocateMemory (acfStruct *acfStructure)
 		acfStructure->dynSpecWindow[i] = (double *)fftw_malloc(sizeof(double)*nsubint);
 	}
 
-	acfStructure->dynPlot = (float *)malloc(sizeof(float)*nsubint*nchn);
+	for (i = 0; i < n; i++)
+	{
+		acfStructure->dynPlot[i] = (float *)malloc(sizeof(float)*nsubint*nchn);
+	}
+
+	for (i = 0; i < ns; i++)
+	{
+		acfStructure->s[i] = -acfStructure->size[1]+i*steps;
+	}
+
+      	for (i = 0; i < nf; i++)
+	{
+		acfStructure->f[i] = -acfStructure->size[0]+i*stepf;
+	}
+
 }
 
 void deallocateMemory (acfStruct *acfStructure)
 {
+	int n = acfStructure->n; // number of dynamic spectrum
 	int nf = acfStructure->nf;
 	int nchn = acfStructure->nchn;
 	
@@ -336,7 +384,6 @@ void deallocateMemory (acfStruct *acfStructure)
 	fftw_free(acfStructure->intensity); 
 	free(acfStructure->acf2d);
 	free(acfStructure->psrt);
-	free(acfStructure->dynPlot);
 
 	int i;
 	for (i = 0; i < nf; i++)
@@ -349,10 +396,14 @@ void deallocateMemory (acfStruct *acfStructure)
 		free(acfStructure->dynSpecWindow[i]);
 	}
 
-	free(acfStructure->dynSpec);
+	for (i = 0; i < n; i++)
+	{
+		free(acfStructure->dynPlot[i]);
+	}
+	//free(acfStructure->dynPlot);
 }
 
-int simDynSpec (acfStruct *acfStructure)
+int simDynSpec (acfStruct *acfStructure, long seed, int nDynSpec)
 {
 	printf ("Simulating dynamic spectrum\n");
 	int nf = acfStructure->nf;
@@ -360,11 +411,9 @@ int simDynSpec (acfStruct *acfStructure)
 	int nchn = acfStructure->nchn;
 	int nsubint = acfStructure->nsubint;
 
-	long seed;
-	
 	int i;
 	int j;
-	seed = TKsetSeed();
+	//seed = TKsetSeed();
 	//printf ("seed %ld\n",seed);
 
 	for (i = 0; i < nf*ns; i++)
@@ -372,8 +421,10 @@ int simDynSpec (acfStruct *acfStructure)
 		//acfStructure->eField[i][0] = acfStructure->psrt[i];
 		//acfStructure->eField[i][1] = acfStructure->psrt[i];
 		acfStructure->eField[i][0] = acfStructure->psrt[i]*TKgaussDev(&seed);
+		//printf ("%lf\n",TKgaussDev(&seed));
 		acfStructure->eField[i][1] = acfStructure->psrt[i]*TKgaussDev(&seed);
 		//printf ("%lf\n",TKgaussDev(&seed));
+		//printf ("######### \n");
 	}
 
 	/////////////////////////////////////////////////////////////////////////////////
@@ -415,7 +466,7 @@ int simDynSpec (acfStruct *acfStructure)
 		for (j = 0; j < nsubint; j++)
 		{
 			acfStructure->dynSpecWindow[i][j] = acfStructure->dynSpec[i+nf0][j+ns0]/sum;
-			acfStructure->dynPlot[i*nsubint+j] = (float)(acfStructure->dynSpecWindow[i][j]*acfStructure->cFlux+acfStructure->whiteLevel*TKgaussDev(&seed));   // add in noise here
+			acfStructure->dynPlot[nDynSpec][i*nsubint+j] = (float)(acfStructure->dynSpecWindow[i][j]*acfStructure->cFlux+acfStructure->whiteLevel*TKgaussDev(&seed));   // add in noise here
 			//printf ("noise rand %lf\n",TKgaussDev(&seed));
 			//acfStructure->dynPlot[i*nsubint+j] = (float)(acfStructure->dynSpecWindow[i][j]);
 			//fprintf (fp, "%.10lf  ", acfStructure->dynSpec[i][j]/sum);
@@ -490,7 +541,7 @@ int calSize (acfStruct *acfStructure, double *size, double *ratio)
 		s[i] = -size[1]+i*steps;
 	}
 
-  for (i = 0; i < nf; i++)
+	for (i = 0; i < nf; i++)
 	{
 		f[i] = -size[0]+i*stepf;
 	}
@@ -544,14 +595,6 @@ float find_peak_value (int n, float *s)
 															
 void preAllocateMemory (acfStruct *acfStructure)
 {
-	long seed;
-	//seed = -1420603014;
-	seed = TKsetSeed();
-	printf ("Seed %ld\n",seed);
-	acfStructure->phaseGradient = TKgaussDev(&seed);
-	//acfStructure->phaseGradient = 0.0;
-	printf ("Phase gradient: %lf\n", acfStructure->phaseGradient);
-
 	double bw, f0, tint, t0;
 	int nchn, nsubint;
 
@@ -584,7 +627,7 @@ void preAllocateMemory (acfStruct *acfStructure)
 	acfStructure->nf = nf;
 }
 
-int readParams(char *fname, char *oname, controlStruct *control)
+int readParams(char *fname, char *oname, int n, controlStruct *control)
 {
 	FILE *fin;
 	char param[1024];
@@ -593,6 +636,8 @@ int readParams(char *fname, char *oname, controlStruct *control)
 
 	// define the output file name
 	strcpy(control->oname,oname);
+
+	control->n = n;
 
 	///////////////////////////////////////
 	if ((fin=fopen(fname,"r"))==NULL)
@@ -724,6 +769,8 @@ void initialiseControl(controlStruct *control)
 	strcpy(control->oname,"UNKNOWN");
 	control->tsub = 0;
 	
+	control->n = 1; // simulate 1 dynamic spectrum by default
+
 	// Standard defaults
 	//strcpy(control->type,"PSR");
 	//control->nbin = 128;
@@ -780,7 +827,7 @@ void heatMap (acfStruct *acfStructure)
 	//printf ("f1 f2: %lf %lf\n", f1, f2);
 
 	zmin=0; 
-	zmax=find_peak_value (dimx*dimy, acfStructure->dynPlot);
+	zmax=find_peak_value (dimx*dimy, acfStructure->dynPlot[0]);
 	//double f1 = 1241; // MHz
 	//double f2 = 1497; // MHz
 	/*The transformation matrix TR is used to calculate the world
@@ -825,7 +872,7 @@ void heatMap (acfStruct *acfStructure)
 	//palett(3, -0.4, 0.3);
 	//cpgimag(tab,dimx,dimy,1,dimx,1,dimy,zmin,zmax,tr);
 	cpgctab(heat_l,heat_r,heat_g,heat_b,5,1.0,0.5);
-	cpgimag(acfStructure->dynPlot,dimx,dimy,1,dimx,1,dimy,zmin,zmax,tr);
+	cpgimag(acfStructure->dynPlot[0],dimx,dimy,1,dimx,1,dimy,zmin,zmax,tr);
 	//cpggray(acfStructure->dynPlot,dimx,dimy,1,dimx,1,dimy,zmin,zmax,tr);
 
 	cpgend();
@@ -1005,3 +1052,117 @@ int plotDynSpec (char *pname)
 	return 0;
 } 
 
+int qualifyVar (acfStruct *acfStructure, controlStruct *control)
+{
+	int i, j;
+	int n = acfStructure->n;
+	int num;
+	float sum;
+
+	float *flux0;    // flux density of each pixel
+	float *flux; // flux densities
+
+	float chiS0;
+	float chiS;
+
+	float m0;
+	float m;
+
+	int nsub = control->nsub;
+	int nchan = control->nchan;
+
+	flux0 = (float*)malloc(sizeof(float)*n*nsub*nchan);
+	flux = (float*)malloc(sizeof(float)*n);
+
+	for (i=0; i<n; i++)
+	{
+		sum = 0;
+		for (j=0; j<nsub*nchan; j++)
+		{
+			sum += acfStructure->dynPlot[i][j];
+		}
+		flux[i] = sum/(nsub*nchan);
+		//printf ("%f %f\n", x[i], flux[i]);
+	}
+
+	num = 0;
+	for (i=0; i<n; i++)
+	{
+		for (j=0; j<nsub*nchan; j++)
+		{
+			flux0[num] = acfStructure->dynPlot[i][j];
+			num++;
+		}
+	}
+
+	// calculate chi-square
+	chiS0 = chiSquare (flux0, n*nsub*nchan, control->whiteLevel);
+	chiS = chiSquare (flux, n, control->whiteLevel/sqrt(nsub*nchan));  // need to check the noise 
+
+	// calculate modulation index
+	m0 = moduIndex (flux0, n*nsub*nchan);
+	m = moduIndex (flux, n);
+
+	if (n == 1)
+	{
+		printf ("%f %f\n", chiS0, m0);
+	}
+	else
+	{
+		printf ("%f %f %f %f\n", chiS0, m0, chiS, m);
+	}
+
+	free(flux0);
+	free(flux);
+
+	return 0;
+}
+
+float chiSquare (float *data, int n, float noise)
+{
+	int i;
+
+	float ave;
+	float chiS;
+	
+	ave = 0.0;
+	for (i=0; i<n; i++)
+	{
+		ave += data[i];
+	}
+	ave = ave/n;
+
+	chiS = 0.0;
+	for (i=0; i<n; i++)
+	{
+		chiS += pow(data[i]-ave,2)/pow(noise,2);
+	}
+
+	return chiS/(n-1);
+}
+
+float moduIndex (float *data, int n)
+{
+	int i;
+
+	float ave, devi;
+	float m;
+
+	ave = 0.0;
+	for (i=0; i<n; i++)
+	{
+		ave += data[i];
+	}
+	ave = ave/n;
+
+	devi = 0.0;
+	for (i=0; i<n; i++)
+	{
+		devi += pow(data[i]-ave,2);
+	}
+	devi = sqrt(devi/n);
+
+	m = devi/ave;
+
+	return m;
+}

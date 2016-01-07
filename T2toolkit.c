@@ -1,6 +1,7 @@
 #ifdef HAVE_CONFIG_H
 #include <config.h>
 #endif
+#include <sys/time.h>
 //  Copyright (C) 2006,2007,2008,2009, George Hobbs, Russell Edwards
 
 /*
@@ -452,7 +453,13 @@ double TKgaussDev(long *seed)
 long TKsetSeed()
 {
   long seed;
-  seed = -time(NULL);
+  struct timeval tv;
+
+  //seed = -time(NULL);
+  gettimeofday(&tv, NULL);
+
+  seed = -(tv.tv_sec*1000000+tv.tv_usec);
+
   return seed;
 }
 
