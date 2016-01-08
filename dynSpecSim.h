@@ -534,9 +534,9 @@ int simDynSpec (acfStruct *acfStructure, long seed, int nDynSpec)
 		nf0 = (int)(rand2*(nf-(int)(bw/f0)));
 		ns0 = (int)(rand2*(ns-(int)(tint/t0)));
 
-		for (i = 0; i < nchn; i+=(int)((bw/nchn)/f0))
+		for (i = 0; i < nchn; i++)
 		{
-			for (j = 0; j < nsubint; j+=(int)((tint/nsubint)/t0))
+			for (j = 0; j < nsubint; j++)
 			{
 				temp = 0.0;
 				for (ii=0; ii<tempf; ii++)
