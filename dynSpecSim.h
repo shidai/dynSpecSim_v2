@@ -685,7 +685,7 @@ float find_peak_value (int n, float *s)
 	
 	return temp[n-1];
 }
-															
+						
 void preAllocateMemory (acfStruct *acfStructure)
 {
 	double bw, f0, tint, t0;

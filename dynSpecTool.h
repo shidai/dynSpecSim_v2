@@ -35,6 +35,9 @@ int histogram (float *data, int n, float *x, float *val, float low, float up, in
 float chiSquare (float *data, int n, float noise);
 float moduIndex (float *data, int n);
 
+float find_max_value (int n, float *s);
+float find_min_value (int n, float *s);
+
 int readParams(char *fname, controlStruct *control)
 {
 	FILE *fin;
@@ -456,6 +459,8 @@ int makePlot (float *data, int n, controlStruct *control, char *dname)
 	char caption[1024];
 	char text[1024];
 
+	float max, min;
+
 	flux0 = (float*)malloc(sizeof(float)*n*nsub*nchan);
 	x0 = (float*)malloc(sizeof(float)*n*nsub*nchan);
 	flux = (float*)malloc(sizeof(float)*n);
@@ -500,12 +505,21 @@ int makePlot (float *data, int n, controlStruct *control, char *dname)
 
       	cpgsch(2); // set character height
       	cpgscf(2); // set character font
-      	cpgenv(0,2*n,-1,8.0,0,1); // set window and viewport and draw labeled frame
-	sprintf (caption, "%s", "Flux density variation");
-	sprintf (text, "Reduced Chi-square %.2f", chiS0);
-	cpgtext (10.0,6.5,text);
-	sprintf (text, "Modulation index %.2f", m0);
-	cpgtext (1400.0,6.5,text);
+
+	// find the max and min
+	max = find_max_value(2*n,flux0);
+	min = find_min_value(2*n,flux0);
+	printf ("%f %f\n", max, min);
+      	//cpgenv(0,2*n,-1,8.0,0,1); // set window and viewport and draw labeled frame
+      	cpgenv(0,2*n,min-0.02*(max-min),max+0.1*(max-min),0,1); // set window and viewport and draw labeled frame
+
+	sprintf(caption, "%s", "Flux density variation");
+	sprintf(text, "Reduced Chi-square %.2f", chiS0);
+	cpgtext(10.0,max+0.15*(max-min),text);
+	//cpgtext(10.0,6.5,text);
+	sprintf(text, "Modulation index %.2f", m0);
+	cpgtext(1650.0,max+0.15*(max-min),text);
+	//cpgtext(1400.0,6.5,text);
       	cpglab("Time","Flux (mJy)",caption);
 
       	cpgsch(1.2); // set character height
@@ -514,15 +528,24 @@ int makePlot (float *data, int n, controlStruct *control, char *dname)
 	// averaged flux density variation
       	cpgsch(2); // set character height
       	cpgscf(2); // set character font
-      	cpgenv(0,n,0,3,0,1); // set window and viewport and draw labeled frame
+
+	// find the max and min
+	max = find_max_value(n,flux);
+	min = find_min_value(n,flux);
+	printf ("%f %f\n", max, min);
+      	//cpgenv(0,n,0,3,0,1); // set window and viewport and draw labeled frame
+      	cpgenv(0,n,min-0.02*(max-min),max+0.1*(max-min),0,1); // set window and viewport and draw labeled frame
 	//cpgsvp(0.1,0.5,0.5,0.9); // set viewport
 	//cpgswin(0.0,10.0,0.0,2.0); // set window, must be float number
 	//cpgbox("BCTSN",0.0,0,"BCTSN",0.0,0);
-	sprintf (caption, "%s", "Averaged flux density variation");
-	sprintf (text, "Reduced Chi-square %.2f", chiS);
-	cpgtext (10.0,2.6,text);
-	sprintf (text, "Modulation index %.2f", m);
-	cpgtext (700.0,2.6,text);
+	
+	sprintf(caption, "%s", "Averaged flux density variation");
+	sprintf(text, "Reduced Chi-square %.2f", chiS);
+	cpgtext(10.0,max+0.15*(max-min),text);
+	//cpgtext(10.0,2.6,text);
+	sprintf(text, "Modulation index %.2f", m);
+	cpgtext(825.0,max+0.15*(max-min),text);
+	//cpgtext(850.0,2.6,text);
       	cpglab("Time","Flux (mJy)",caption);
 
       	cpgsch(1.2); // set character height
@@ -539,8 +562,15 @@ int makePlot (float *data, int n, controlStruct *control, char *dname)
 
       	cpgsch(2); // set character height
       	cpgscf(2); // set character font
-      	cpgenv(-5,5,0,4500,0,1); // set window and viewport and draw labeled frame
-	sprintf (caption, "%s", "Flux density histogram");
+
+	// find the max and min
+	max = find_max_value(step,val);
+	min = find_min_value(step,val);
+	printf ("%f %f\n", max, min);
+      	//cpgenv(-5,5,0,4500,0,1); // set window and viewport and draw labeled frame
+      	cpgenv(-5,5,0,max+0.1*(max-min),0,1); // set window and viewport and draw labeled frame
+
+	sprintf(caption, "%s", "Flux density histogram");
       	cpglab("Flux (mJy)","Number",caption);
 	cpgbin(step,xHis,val,0);
 	cpgsci(2);
@@ -646,3 +676,64 @@ float moduIndex (float *data, int n)
 
 	return m;
 }
+
+float find_max_value (int n, float *s)
+{
+	int i;
+	float *temp;
+
+	temp = (float *)malloc(sizeof(float)*n);
+
+	for (i = 0; i < n; i++)
+	{
+		temp[i] = s[i];
+	}
+
+	float a, b, c;
+	for (i = 0; i < n-1; i++)
+	{
+		a = temp[i];
+		b = temp[i+1];
+															
+		c = (a >= b ? a : b);
+		
+		temp[i+1] = c;
+	
+	}
+	
+	c = temp[n-1];
+	free(temp);
+
+	return c;
+}
+
+float find_min_value (int n, float *s)
+{
+	int i;
+	float *temp;
+
+	temp = (float *)malloc(sizeof(float)*n);
+
+	for (i = 0; i < n; i++)
+	{
+		temp[i] = s[i];
+	}
+
+	float a, b, c;
+	for (i = 0; i < n-1; i++)
+	{
+		a = temp[i];
+		b = temp[i+1];
+															
+		c = (a <= b ? a : b);
+		
+		temp[i+1] = c;
+	
+	}
+	
+	c = temp[n-1];
+	free(temp);
+
+	return c;
+}
+
